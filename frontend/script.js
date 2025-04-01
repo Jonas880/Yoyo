@@ -23,9 +23,6 @@ const segmentsHeader = document.getElementById('segments-header');
 const editorStatusDisplay = document.getElementById('editor-status'); // Renamed from editorStatus
 const targetWordsDisplay = document.getElementById('target-words-display');
 const segmentsContainer = document.getElementById('segments-container');
-const prevSegmentButton = document.getElementById('prev-segment-button');
-const nextSegmentButton = document.getElementById('next-segment-button');
-const segmentNavInfo = document.getElementById('segment-nav-info');
 const exportFormatSelect = document.getElementById('export-format');
 const exportButton = document.getElementById('export-button'); // Renamed from downloadButton
 const exportFilename = document.getElementById('export-filename'); // Renamed from downloadFilename
@@ -53,8 +50,9 @@ function init() {
     if (audioFileInput) audioFileInput.addEventListener('change', handleFileChange);
     if (processButton) processButton.addEventListener('click', handleProcess);
     if (exportButton) exportButton.addEventListener('click', handleExport);
-    if (prevSegmentButton) prevSegmentButton.addEventListener('click', () => selectSegment(activeSegmentIndex - 1));
-    if (nextSegmentButton) nextSegmentButton.addEventListener('click', () => selectSegment(activeSegmentIndex + 1));
+    // Remove segment navigation listeners
+    // if (prevSegmentButton) prevSegmentButton.addEventListener('click', () => selectSegment(activeSegmentIndex - 1));
+    // if (nextSegmentButton) nextSegmentButton.addEventListener('click', () => selectSegment(activeSegmentIndex + 1));
     // Removed global audio player listeners
     document.addEventListener('keydown', handleGlobalKeyDown);
     // Removed global pointerup listeners
@@ -352,7 +350,7 @@ function handleExport() {
 }
 
 function resetResults() {
-    if (!segmentsContainer || !resultsSection || !exportButton || !exportFilename || !originalTextPreview || !editedTextPreview || !prevSegmentButton || !nextSegmentButton || !segmentNavInfo) return;
+    if (!segmentsContainer || !resultsSection || !exportButton || !exportFilename || !originalTextPreview || !editedTextPreview || !comparisonExpander) return;
 
     // --- NEW: Revoke old Blob URLs to free memory ---
     segmentData.forEach(seg => {
@@ -377,15 +375,13 @@ function resetResults() {
     exportFilename.textContent = '';
     originalTextPreview.value = '';
     editedTextPreview.value = '';
-    prevSegmentButton.disabled = true;
-    nextSegmentButton.disabled = true;
-    segmentNavInfo.textContent = '';
+    comparisonExpander.style.display = 'none';
 }
 
 // --- Segment Rendering & Interaction ---
 
 function renderSegments() {
-    if (!segmentsContainer || !resultsSection || !exportButton || !prevSegmentButton || !nextSegmentButton || !segmentNavInfo) return; // Add checks
+    if (!segmentsContainer || !resultsSection || !exportButton || !comparisonExpander || !originalTextPreview || !editedTextPreview) return; // Add checks
 
     segmentsContainer.innerHTML = ''; // Clear previous segments
 
@@ -401,50 +397,60 @@ function renderSegments() {
     editorStatusDisplay.textContent = `Editor Status: ${currentEditorStatus}`;
 
     segmentData.forEach((segment, index) => {
+        // ---> REMOVE LOGGING HERE <--- //
+        // console.log(`Rendering segment ${index}:`, segment); // Log the whole segment object
+
         const segmentElement = document.createElement('div');
         segmentElement.className = 'segment';
         segmentElement.id = `segment-${index}`;
         segmentElement.tabIndex = 0; // Make segment focusable
 
-        const metaDiv = document.createElement('div');
-        metaDiv.className = 'segment-meta';
+        const segmentMeta = document.createElement('div');
+        segmentMeta.className = 'segment-meta';
 
         const timestamps = document.createElement('span');
         timestamps.className = 'segment-timestamps';
-        timestamps.textContent = `Segment ${index + 1}: ${formatTime(segment.start)} - ${formatTime(segment.end)}`;
+        // ---> USE parseTime HERE <--- //
+        timestamps.textContent = `${formatTime(parseTime(segment.start))} - ${formatTime(parseTime(segment.end))}`;
 
-        const metaRightDiv = document.createElement('div');
-        metaRightDiv.className = 'segment-meta-right';
+        const segmentMetaRight = document.createElement('div');
+        segmentMetaRight.className = 'segment-meta-right';
 
+        // Create Highlight Button
         const highlightButton = document.createElement('button');
         highlightButton.className = 'highlight-button';
-        highlightButton.title = 'Toggle Highlight';
-        highlightButton.textContent = 'Highlight';
+        highlightButton.title = 'Toggle Highlight (Cmd/Ctrl+H)';
+        highlightButton.textContent = '⭐'; // Changed from 'H'
         highlightButton.onclick = (e) => {
             e.stopPropagation(); // Prevent segment selection when clicking button
             toggleHighlight(index);
         };
-
-        metaRightDiv.appendChild(highlightButton);
-        metaDiv.appendChild(timestamps);
-        metaDiv.appendChild(metaRightDiv);
-
-        // Native Audio Player Controls
-        const audioControlsDiv = document.createElement('div');
-        audioControlsDiv.className = 'segment-controls-native';
-        const audioElement = document.createElement('audio');
-        audioElement.id = `audio-${index}`;
-        audioElement.controls = true;
-        audioElement.preload = 'auto'; // Important for preloaded blobs
-        if (segment.blobUrl) {
-            audioElement.src = segment.blobUrl;
+        if (segment.is_highlighted) {
+            highlightButton.classList.add('is-highlighted');
         }
-        audioControlsDiv.appendChild(audioElement);
 
-        // Event listeners for native player
-        audioElement.onplay = () => selectSegment(index, false); // Select segment on play, don't scroll
-        // Add other necessary listeners if needed (e.g., onended, onpause)
+        // Append timestamps to the left side of meta
+        segmentMeta.appendChild(timestamps);
 
+        // Append GPT error icon if present (to the right side)
+        if (segment.gpt_error) {
+            const gptErrorSpan = document.createElement('span');
+            gptErrorSpan.className = 'segment-gpt-error';
+            gptErrorSpan.textContent = '⚠️';
+            gptErrorSpan.title = `GPT Error: ${segment.gpt_error}`;
+            segmentMetaRight.appendChild(gptErrorSpan);
+        }
+        // Do NOT append highlightButton here anymore
+        // segmentMetaRight.appendChild(highlightButton); // MOVED
+
+        // Append the right side container to the meta bar
+        segmentMeta.appendChild(segmentMetaRight);
+
+        // Create Native Controls Container (holds textarea and audio)
+        const segmentControlsNative = document.createElement('div');
+        segmentControlsNative.className = 'segment-controls-native';
+
+        // Text Area
         const textArea = document.createElement('textarea');
         textArea.id = `text-${index}`;
         textArea.value = segment.current_text;
@@ -460,8 +466,8 @@ function renderSegments() {
 
         // Initial height adjustment
         // We need to temporarily add to DOM to calculate scrollHeight correctly
-        segmentElement.appendChild(metaDiv);
-        segmentElement.appendChild(audioControlsDiv);
+        segmentElement.appendChild(segmentMeta);
+        segmentElement.appendChild(segmentControlsNative);
         segmentElement.appendChild(textArea);
         segmentsContainer.appendChild(segmentElement); // Add to DOM *before* measuring
 
@@ -474,7 +480,7 @@ function renderSegments() {
          // Highlight if needed
         if (segment.is_highlighted) {
             segmentElement.classList.add('highlighted');
-            highlightButton.textContent = 'Unhighlight';
+            highlightButton.classList.add('is-highlighted');
         }
 
         // Show GPT error if present
@@ -484,14 +490,29 @@ function renderSegments() {
             errorSpan.textContent = `⚠️ AI Edit Error: ${segment.gpt_error}`;
             segmentElement.insertBefore(errorSpan, textArea);
         }
+
+        // Append the audio element
+        const audioElement = document.createElement('audio');
+        audioElement.id = `audio-${index}`;
+        audioElement.controls = true;
+        audioElement.preload = 'auto'; // Important for preloaded blobs
+        if (segment.blobUrl) {
+            audioElement.src = segment.blobUrl;
+        }
+        segmentControlsNative.appendChild(audioElement);
+
+        // Append the highlight button HERE
+        segmentControlsNative.appendChild(highlightButton);
     });
 
-    updateNavButtons();
     updateComparisonPreview();
-    // Select the first segment by default if none are active
-    if (activeSegmentIndex < 0 && segmentData.length > 0) {
-        selectSegment(0);
-    }
+    comparisonExpander.style.display = 'block'; // Show comparison
+
+    // Select the first segment by default, but don't scroll initially if preloading
+    selectSegment(0, false);
+
+    // Set initial focus to the first textarea for keyboard navigation
+    const firstTextArea = segmentsContainer.querySelector('.segment textarea');
 }
 
 // --- Highlight Logic ---
@@ -515,39 +536,39 @@ function toggleHighlight(index) {
 
 // --- Segment Selection & Navigation Logic ---
 function selectSegment(index, scrollIntoView = true) {
-    if (index < 0 || index >= segmentData.length || index === activeSegmentIndex) {
-        updateNavButtons(); // Still update nav buttons
-        return;
-    }
+    if (index < 0 || index >= segmentData.length || !segmentsContainer) return;
 
-    // Deactivate previous segment visually
-    const previousSegment = document.getElementById(`segment-${activeSegmentIndex}`);
-    if (previousSegment) {
-        previousSegment.classList.remove('active');
-    }
-
-    // Activate new segment visually
-    activeSegmentIndex = index;
-    const currentSegment = document.getElementById(`segment-${activeSegmentIndex}`);
-    if (currentSegment) {
-        currentSegment.classList.add('active');
-        if (scrollIntoView) {
-             currentSegment.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    // Deactivate previously active segment
+    const previousActive = segmentsContainer.querySelector('.segment.active');
+    if (previousActive) {
+        previousActive.classList.remove('active');
+        // Optional: Pause audio if it was playing in the previous segment
+        const audio = previousActive.querySelector('audio');
+        if (audio && !audio.paused) {
+            audio.pause();
         }
     }
 
-    if (segmentNavInfo) segmentNavInfo.textContent = `Segment ${index + 1} of ${segmentData.length}`;
-    updateNavButtons();
-    // No need to update play/pause button UI or progress bar
-}
+    // Activate the new segment
+    const segmentElement = segmentsContainer.querySelector(`.segment[data-index="${index}"]`);
+    if (segmentElement) {
+        activeSegmentIndex = index;
+        segmentElement.classList.add('active');
+        // Focus the textarea within the activated segment for immediate editing
+        const textarea = segmentElement.querySelector('textarea');
+        if (textarea) {
+            // textarea.focus(); // Focus can be disruptive, maybe only on keyboard nav?
+        }
+        if (scrollIntoView) {
+            segmentElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }
 
-function updateNavButtons() {
-    if (prevSegmentButton) prevSegmentButton.disabled = activeSegmentIndex <= 0;
-    if (nextSegmentButton) nextSegmentButton.disabled = activeSegmentIndex >= segmentData.length - 1;
+    // console.log("Selected segment:", activeSegmentIndex);
 }
 
 function updateComparisonPreview() {
-    if (!originalTextPreview || !editedTextPreview) return; // Add checks
+    if (!originalTextPreview || !editedTextPreview) return;
 
     let originalFullText = segmentData.map(seg => seg.original_text).join(" ");
     let editedFullText = segmentData.map(seg => seg.current_text).join(" ");
@@ -558,8 +579,32 @@ function updateComparisonPreview() {
 
 // --- Audio Handling (Simplified / Commented Out) ---
 
+function parseTime(timeString) {
+    if (typeof timeString !== 'string') {
+        console.warn("parseTime received non-string input:", timeString);
+        return 0;
+    }
+    const parts = timeString.split(/[:.]/); // Split by colon or period
+    if (parts.length < 3) {
+         console.warn("parseTime received invalid format string:", timeString);
+         return 0;
+    }
+    const hours = parseInt(parts[0], 10) || 0;
+    const minutes = parseInt(parts[1], 10) || 0;
+    const seconds = parseFloat(`${parts[2]}.${parts[3] || '0'}`); // Re-join seconds and milliseconds
+    if (isNaN(hours) || isNaN(minutes) || isNaN(seconds)) {
+        console.warn("parseTime failed to parse components:", timeString, parts);
+        return 0;
+    }
+    return (hours * 3600) + (minutes * 60) + seconds;
+}
+
 function formatTime(seconds) {
+    // ---> REMOVE LOGGING HERE <--- //
+    // console.log(`Formatting time for input: ${seconds} (Type: ${typeof seconds})`);
+
     if (isNaN(seconds) || seconds === undefined || seconds === null) {
+        // console.warn("formatTime received invalid input:", seconds); // Keep warning low-key
         return '00:00.0';
     }
     const minutes = Math.floor(seconds / 60);
@@ -595,25 +640,34 @@ function handleGlobalKeyDown(event) {
     if (targetIsAudio) return; // Let browser handle audio shortcuts
 
     switch (event.key) {
-        case 'ArrowDown':
-            if (!targetIsTextArea) {
-                 event.preventDefault();
-                 selectSegment(activeSegmentIndex + 1);
+        case 'ArrowUp':
+            event.preventDefault();
+            // selectSegment(activeSegmentIndex - 1);
+            // Find previous segment and focus its textarea for seamless up/down nav
+            const prevSegmentIndex = activeSegmentIndex - 1;
+            if (prevSegmentIndex >= 0) {
+                selectSegment(prevSegmentIndex);
+                const prevSegment = segmentsContainer.querySelector(`.segment[data-index="${prevSegmentIndex}"] textarea`);
+                if (prevSegment) prevSegment.focus();
             }
             break;
-        case 'ArrowUp':
-             if (!targetIsTextArea) {
-                 event.preventDefault();
-                 selectSegment(activeSegmentIndex - 1);
-             }
+        case 'ArrowDown':
+            event.preventDefault();
+            // selectSegment(activeSegmentIndex + 1);
+            // Find next segment and focus its textarea
+            const nextSegmentIndex = activeSegmentIndex + 1;
+            if (nextSegmentIndex < segmentData.length) {
+                selectSegment(nextSegmentIndex);
+                const nextSegment = segmentsContainer.querySelector(`.segment[data-index="${nextSegmentIndex}"] textarea`);
+                if (nextSegment) nextSegment.focus();
+            }
             break;
-        // Remove Spacebar shortcut as it interferes with native controls
-        /* case ' ':
-             if (!targetIsTextArea && activeSegmentIndex !== -1) {
-                 event.preventDefault();
-                 // togglePlayPause(activeSegmentIndex); // Removed
-             }
-            break; */
+        case ' ': // Spacebar
+             // Prevent page scroll if focus is on button or potentially textarea?
+            if (document.activeElement.tagName === 'BUTTON' || document.activeElement.tagName === 'TEXTAREA') {
+                // ... existing code ...
+            }
+            break;
     }
 }
 
