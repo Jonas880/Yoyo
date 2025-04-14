@@ -50,6 +50,30 @@ def fix_segment_with_gpt(text_segment):
         logger.error(f"OpenAI API Error: {e}.") # Use logger
         return text_segment, f"OpenAI API Error: {e}"
 
+# --- Translation Function (New) ---
+def translate_segment_with_gpt(text_segment, target_language="Norwegian"):
+    if not OPENAI_API_KEY:
+        logger.error("translate_segment_with_gpt called without API Key.")
+        return text_segment, f"OpenAI API Key missing for translation to {target_language}"
+    prompt = (f"Translate the following text to {target_language}. "
+              f"Preserve the original meaning and context. Output ONLY the translated text.\\\\n\\\\n" + text_segment)
+    try:
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o", messages=[{"role": "user", "content": prompt}], temperature=0.3) # Slightly higher temp for translation
+        reply = response.choices[0].message.content.strip()
+        if not reply:
+            logger.warning(f"GPT empty translation reply for: '{text_segment[:50]}...'.")
+            return text_segment, f"GPT returned empty reply during translation to {target_language}"
+        logger.debug(f"GPT translated to {target_language}: '{text_segment[:50]}...' -> '{reply[:50]}...'")
+        return reply, None # Return translated text and no error
+    except openai.AuthenticationError as e:
+        logger.error(f"OpenAI Auth Error during translation: {e}.")
+        return text_segment, f"OpenAI Authentication Error during translation to {target_language}"
+    except Exception as e:
+        logger.error(f"OpenAI API Error during translation: {e}.")
+        return text_segment, f"OpenAI API Error during translation to {target_language}: {e}"
+
 # --- Cleaning Function ---
 def clean_final_text(text):
     return re.sub(r'\s+', ' ', text).strip()

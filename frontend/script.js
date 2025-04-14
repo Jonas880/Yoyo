@@ -198,12 +198,23 @@ async function handleProcess() {
     // Reset previous results
     resetResults();
 
+    // Get form values
+    const targetWords = targetWordsInput.value;
+    const fixTypos = fixTyposCheckbox.checked;
+    const translateNorwegian = document.getElementById('translate-norwegian-checkbox').checked; // Get translation checkbox value
+
     const formData = new FormData();
     formData.append('transcript_file', transcriptFile);
     formData.append('audio_file', audioFile);
     currentTargetWords = targetWordsInput.value;
-    formData.append('target_words', currentTargetWords);
-    formData.append('fix_typos', fixTyposCheckbox.checked);
+    formData.append('target_words', targetWords);
+    // Append boolean flags only if true
+    if (fixTypos) {
+        formData.append('fix_typos', 'true');
+    }
+    if (translateNorwegian) { // <-- Append translation flag if checked
+        formData.append('translate_norwegian', 'true');
+    }
 
     showLoading(true, "Uploading & Processing...");
 
@@ -249,7 +260,7 @@ async function handleProcess() {
     } catch (error) {
         setError(`Processing failed: ${error.message}`);
         showLoading(false);
-        resetResults(); // Ensure UI is cleared on error
+        resetResults(); // Clear potentially partial results on error
     }
 }
 
@@ -381,138 +392,154 @@ function resetResults() {
 // --- Segment Rendering & Interaction ---
 
 function renderSegments() {
-    if (!segmentsContainer || !resultsSection || !exportButton || !comparisonExpander || !originalTextPreview || !editedTextPreview) return; // Add checks
+    if (!segmentsContainer || !editorStatusDisplay || !targetWordsDisplay || !exportButton || !exportFilename) return;
 
     segmentsContainer.innerHTML = ''; // Clear previous segments
-
     if (segmentData.length === 0) {
-        resultsSection.style.display = 'none';
+        segmentsHeader.style.display = 'none';
+        resultsSection.style.display = 'none'; // Hide results if no segments
+        setInfoMessage("No segments found in the transcript.", "warning");
         return;
     }
 
-    resultsSection.style.display = 'block';
+    // Display status
+    editorStatusDisplay.textContent = `Editor Applied: ${currentEditorStatus || 'None'}`;
+    targetWordsDisplay.textContent = `Target Words: ${currentTargetWords}`;
+    segmentsHeader.style.display = 'flex';
+    resultsSection.style.display = 'block'; // Show results section
+
+    segmentData.forEach(createSegmentElement);
+
+    // Update export filename suggestion
+    const originalFilename = transcriptFileInput.files[0]?.name.replace(/\.txt$/i, '') || 'export';
+    exportFilename.value = `${originalFilename}_edited`;
+
+    // Enable export button
     exportButton.disabled = false;
-    segmentsHeader.textContent = `Transcript Segments (${segmentData.length})`;
-    targetWordsDisplay.textContent = `Target words/segment: ~${currentTargetWords}`;
-    editorStatusDisplay.textContent = `Editor Status: ${currentEditorStatus}`;
+    exportButton.classList.remove('disabled');
 
-    segmentData.forEach((segment, index) => {
-        // ---> REMOVE LOGGING HERE <--- //
-        // console.log(`Rendering segment ${index}:`, segment); // Log the whole segment object
+    // Initial comparison preview update
+    updateComparisonPreview();
+}
 
-        const segmentElement = document.createElement('div');
-        segmentElement.className = 'segment';
-        segmentElement.id = `segment-${index}`;
-        segmentElement.tabIndex = 0; // Make segment focusable
+// MODIFIED: Creates a single segment element
+function createSegmentElement(segment, index) {
+    const segmentDiv = document.createElement('div');
+    segmentDiv.classList.add('segment');
+    segmentDiv.dataset.index = index;
+    if (segment.is_highlighted) {
+        segmentDiv.classList.add('highlighted');
+    }
 
-        const segmentMeta = document.createElement('div');
-        segmentMeta.className = 'segment-meta';
+    const segmentHeader = document.createElement('div');
+    segmentHeader.classList.add('segment-header');
 
-        const timestamps = document.createElement('span');
-        timestamps.className = 'segment-timestamps';
-        // ---> USE parseTime HERE <--- //
-        timestamps.textContent = `${formatTime(parseTime(segment.start))} - ${formatTime(parseTime(segment.end))}`;
+    const segmentNumber = document.createElement('span');
+    segmentNumber.classList.add('segment-number');
+    segmentNumber.textContent = `#${index + 1}`;
 
-        const segmentMetaRight = document.createElement('div');
-        segmentMetaRight.className = 'segment-meta-right';
+    const segmentTimestamps = document.createElement('span');
+    segmentTimestamps.classList.add('segment-timestamps');
+    segmentTimestamps.textContent = `${segment.start} → ${segment.end}`;
 
-        // Create Highlight Button
+    // Clickable header to select segment
+    segmentHeader.onclick = () => selectSegment(index);
+
+    // Container for buttons on the right
+    const headerControls = document.createElement('div');
+    headerControls.classList.add('header-controls');
+
+    // Highlight Button
         const highlightButton = document.createElement('button');
-        highlightButton.className = 'highlight-button';
-        highlightButton.title = 'Toggle Highlight (Cmd/Ctrl+H)';
-        highlightButton.textContent = '⭐'; // Changed from 'H'
+    highlightButton.innerHTML = '<i class="fas fa-highlighter"></i>';
+    highlightButton.classList.add('control-button', 'highlight-button');
+    highlightButton.title = 'Toggle Highlight';
         highlightButton.onclick = (e) => {
-            e.stopPropagation(); // Prevent segment selection when clicking button
+        e.stopPropagation(); // Prevent header click
             toggleHighlight(index);
         };
-        if (segment.is_highlighted) {
-            highlightButton.classList.add('is-highlighted');
+
+    // Audio Controls
+    const audioControls = document.createElement('div');
+    audioControls.classList.add('audio-controls');
+    const audioElement = document.createElement('audio');
+    audioElement.id = `audio-${index}`;
+    audioElement.preload = 'auto'; // Preload was done earlier
+    audioElement.src = segment.blobUrl; // Set source from preloaded blob
+    audioElement.controls = true; // Use native controls
+    audioElement.onplay = () => selectSegment(index); // Select segment on play
+    audioElement.onerror = (e) => {
+        console.error(`Error playing audio for segment ${index}:`, e);
+        const errorMsg = segmentDiv.querySelector('.audio-error-message') || document.createElement('div');
+        errorMsg.textContent = 'Error playing audio.';
+        errorMsg.className = 'error-message audio-error-message'; // Specific class
+        if (!segmentDiv.querySelector('.audio-error-message')) {
+             audioControls.appendChild(errorMsg);
         }
+    };
+    audioControls.appendChild(audioElement);
 
-        // Append timestamps to the left side of meta
-        segmentMeta.appendChild(timestamps);
+    headerControls.appendChild(highlightButton);
+    headerControls.appendChild(audioControls);
 
-        // Append GPT error icon if present (to the right side)
-        if (segment.gpt_error) {
-            const gptErrorSpan = document.createElement('span');
-            gptErrorSpan.className = 'segment-gpt-error';
-            gptErrorSpan.textContent = '⚠️';
-            gptErrorSpan.title = `GPT Error: ${segment.gpt_error}`;
-            segmentMetaRight.appendChild(gptErrorSpan);
-        }
-        // Do NOT append highlightButton here anymore
-        // segmentMetaRight.appendChild(highlightButton); // MOVED
+    segmentHeader.appendChild(segmentNumber);
+    segmentHeader.appendChild(segmentTimestamps);
+    segmentHeader.appendChild(headerControls);
 
-        // Append the right side container to the meta bar
-        segmentMeta.appendChild(segmentMetaRight);
+    // Text Area Container
+    const textContainer = document.createElement('div');
+    textContainer.classList.add('text-container');
 
-        // Create Native Controls Container (holds textarea and audio)
-        const segmentControlsNative = document.createElement('div');
-        segmentControlsNative.className = 'segment-controls-native';
-
-        // Text Area
         const textArea = document.createElement('textarea');
         textArea.id = `text-${index}`;
-        textArea.value = segment.current_text;
-        textArea.setAttribute('aria-label', `Segment ${index + 1} text`);
-
-        // MODIFIED: Use adjustTextAreaHeight on input
-        textArea.addEventListener('input', (event) => {
-            segmentData[index].current_text = event.target.value;
-            updateComparisonPreview();
-            // Adjust height while typing
-            adjustTextAreaHeight(event.target); // Pass the textarea element
-        });
-
-        // Initial height adjustment
-        // We need to temporarily add to DOM to calculate scrollHeight correctly
-        segmentElement.appendChild(segmentMeta);
-        segmentElement.appendChild(segmentControlsNative);
-        segmentElement.appendChild(textArea);
-        segmentsContainer.appendChild(segmentElement); // Add to DOM *before* measuring
-
-        // MODIFIED: Call adjustTextAreaHeight after adding to DOM
+    textArea.classList.add('segment-text');
+    textArea.value = segment.current_text; // Use current_text
+    textArea.dataset.original = segment.original_text; // Store original for comparison/reset
+    textArea.onfocus = () => selectSegment(index); // Select segment on focus
+    textArea.oninput = () => {
+        segmentData[index].current_text = textArea.value;
+        segmentDiv.classList.add('edited');
+        // Enable export button (already enabled, but safe)
+        exportButton.disabled = false;
+        exportButton.classList.remove('disabled');
         adjustTextAreaHeight(textArea);
+        updateComparisonPreview(); // Update preview on edit
+    };
 
-        // Add focus listener to select segment
-        segmentElement.addEventListener('focus', () => selectSegment(index, false)); // Select on focus, don't scroll unless necessary
+    // Append Text Area
+    textContainer.appendChild(textArea);
 
-         // Highlight if needed
-        if (segment.is_highlighted) {
-            segmentElement.classList.add('highlighted');
-            highlightButton.classList.add('is-highlighted');
-        }
-
-        // Show GPT error if present
-        if (segment.gpt_error) {
+    // Translation Display Area (if translation exists)
+    if (segment.translated_text) {
+        const translationDiv = document.createElement('div');
+        translationDiv.classList.add('segment-translation');
+        // Use innerHTML to allow simple formatting like <strong>
+        translationDiv.innerHTML = `<strong>Norwegian:</strong> ${segment.translated_text}`;
+        if (segment.translation_error) {
+            // Append error message as a span within the translation div
             const errorSpan = document.createElement('span');
-            errorSpan.className = 'segment-gpt-error';
-            errorSpan.textContent = `⚠️ AI Edit Error: ${segment.gpt_error}`;
-            segmentElement.insertBefore(errorSpan, textArea);
+            errorSpan.className = 'error-message translation-error'; // Specific class
+            errorSpan.textContent = ` (Translation Error: ${segment.translation_error})`;
+            translationDiv.appendChild(errorSpan);
         }
+        textContainer.appendChild(translationDiv); // Add below text area
+    }
 
-        // Append the audio element
-        const audioElement = document.createElement('audio');
-        audioElement.id = `audio-${index}`;
-        audioElement.controls = true;
-        audioElement.preload = 'auto'; // Important for preloaded blobs
-        if (segment.blobUrl) {
-            audioElement.src = segment.blobUrl;
-        }
-        segmentControlsNative.appendChild(audioElement);
+    // Error Display Area (for GPT typos etc.)
+    if (segment.gpt_error) {
+        const gptErrorDiv = document.createElement('div');
+        gptErrorDiv.classList.add('error-message', 'gpt-error'); // Specific class
+        gptErrorDiv.textContent = `Correction Error: ${segment.gpt_error}`;
+        textContainer.appendChild(gptErrorDiv); // Add below text area (or translation)
+    }
 
-        // Append the highlight button HERE
-        segmentControlsNative.appendChild(highlightButton);
-    });
+    segmentDiv.appendChild(segmentHeader);
+    segmentDiv.appendChild(textContainer);
 
-    updateComparisonPreview();
-    comparisonExpander.style.display = 'block'; // Show comparison
+    segmentsContainer.appendChild(segmentDiv);
 
-    // Select the first segment by default, but don't scroll initially if preloading
-    selectSegment(0, false);
-
-    // Set initial focus to the first textarea for keyboard navigation
-    const firstTextArea = segmentsContainer.querySelector('.segment textarea');
+    // Adjust height after appending to DOM
+    adjustTextAreaHeight(textArea);
 }
 
 // --- Highlight Logic ---

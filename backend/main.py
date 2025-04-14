@@ -17,6 +17,7 @@ from core_logic import (
     get_audio_format_from_upload,
     group_blocks_by_word_count,
     fix_segment_with_gpt,
+    translate_segment_with_gpt,
     get_audio_segment,
     time_to_millis, # Needed for audio slicing
     HIGHLIGHT_MARKER, # Might be needed if backend adds markers later
@@ -40,10 +41,13 @@ app = FastAPI()
 # Adjust origins as needed for deployment
 origins = [
     "http://localhost",
-    "http://localhost:8000", # Default for simple HTTP server
     "http://127.0.0.1",
+    "http://localhost:5001",  # Allow backend origin itself if needed
+    "http://127.0.0.1:5001",
+    "http://localhost:8000",  # Keep frontend origin (in case it works later)
     "http://127.0.0.1:8000",
-    # Add your frontend deployment URL here
+    "http://localhost:8080",  # Add frontend origin (browser reports this)
+    "http://127.0.0.1:8080", # Add frontend origin (alternative)
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -66,12 +70,16 @@ def remove_temp_file(file_path: Path):
 
 @app.post("/api/process")
 async def process_files(
+    request: Request,
     background_tasks: BackgroundTasks,
     transcript_file: UploadFile = File(...),
     audio_file: UploadFile = File(...),
     target_words: int = Form(DEFAULT_TARGET_WORD_COUNT),
-    fix_typos: bool = Form(False)
+    fix_typos: bool = Form(False),
+    translate_norwegian: bool = Form(False)
 ):
+    logging.info(f"--- ENTERING /api/process ---")
+    logging.info(f"Request Headers: {dict(request.headers)}")
     session_id = str(uuid.uuid4())
     logging.info(f"Processing request for session {session_id}")
     audio_path = None # Define audio_path before try block
@@ -107,20 +115,41 @@ async def process_files(
         # 5. Optional: Fix Typos with GPT
         gpt_editor_status = "None"
         if fix_typos:
-            gpt_editor_status = "GPT-4o (Per Segment)"
-            logging.info(f"[{session_id}] Starting GPT correction for {len(grouped_segments)} segments.")
-            # NOTE: Doing this sequentially. For many segments, consider parallel async calls.
+            gpt_editor_status = "GPT-4o (Typos)"
+            logging.info(f"[{session_id}] Starting GPT typo correction for {len(grouped_segments)} segments.")
             for i, seg in enumerate(grouped_segments):
                 corrected_text, gpt_error = fix_segment_with_gpt(seg['text'])
-                seg['text'] = corrected_text # Update text with corrected version
-                seg['gpt_error'] = gpt_error # Store any error message
+                seg['text'] = corrected_text
+                seg['gpt_error'] = gpt_error
                 if gpt_error:
-                    logging.warning(f"[{session_id}] GPT error on seg {i}: {gpt_error}")
-            logging.info(f"[{session_id}] GPT correction finished.")
+                    logging.warning(f"[{session_id}] GPT typo error on seg {i}: {gpt_error}")
+            logging.info(f"[{session_id}] GPT typo correction finished.")
         else:
-             # Ensure gpt_error field exists even if GPT wasn't run
              for seg in grouped_segments: seg['gpt_error'] = None
 
+        # 5b. Optional: Translate to Norwegian with GPT
+        translator_status = "None"
+        if translate_norwegian:
+            translator_status = "GPT-4o (Norwegian)"
+            logging.info(f"[{session_id}] Starting GPT translation to Norwegian for {len(grouped_segments)} segments.")
+            # Translate the potentially typo-corrected text
+            for i, seg in enumerate(grouped_segments):
+                translated_text, trans_error = translate_segment_with_gpt(seg['text'])
+                seg['translated_text'] = translated_text # Store translation
+                seg['translation_error'] = trans_error # Store any error
+                if trans_error:
+                    logging.warning(f"[{session_id}] GPT translation error on seg {i}: {trans_error}")
+            logging.info(f"[{session_id}] GPT translation finished.")
+            # Update editor status string
+            if gpt_editor_status != "None":
+                gpt_editor_status += " + Translation (Norwegian)"
+            else:
+                gpt_editor_status = "GPT-4o (Translation - Norwegian)"
+        else:
+             # Ensure translation fields exist even if not run
+             for seg in grouped_segments:
+                 seg['translated_text'] = None
+                 seg['translation_error'] = None
 
         # 6. Store Session Data (In-Memory)
         session_data[session_id] = {
@@ -133,7 +162,7 @@ async def process_files(
         # 7. Return Session ID and Initial Segments
         return JSONResponse(content={
             "session_id": session_id,
-            "segments": grouped_segments, # Send initial data to frontend
+            "segments": grouped_segments, # Send initial data (now includes translation)
             "editor_status": gpt_editor_status,
             "target_words": target_words
         })
